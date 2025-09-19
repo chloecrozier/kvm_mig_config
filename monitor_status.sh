@@ -444,6 +444,194 @@ show_resource_summary() {
     echo
 }
 
+# Issue detection and troubleshooting
+show_issues_and_troubleshooting() {
+    print_section "Issues & Troubleshooting"
+    
+    issues_found=false
+    
+    print_subsection "Common Issues Detection"
+    
+    # Check 1: Virtualization not enabled
+    virt_count=$(egrep -c '(vmx|svm)' /proc/cpuinfo 2>/dev/null || echo "0")
+    if [ "$virt_count" -eq 0 ]; then
+        echo -e "  ${RED}✗ ISSUE:${NC} CPU virtualization not enabled"
+        echo -e "    ${YELLOW}Fix:${NC} Enable Intel VT-x or AMD SVM in BIOS"
+        issues_found=true
+    fi
+    
+    # Check 2: IOMMU not enabled
+    if [ ! -d "/sys/kernel/iommu_groups" ] || [ -z "$(ls -A /sys/kernel/iommu_groups 2>/dev/null)" ]; then
+        echo -e "  ${RED}✗ ISSUE:${NC} IOMMU not enabled"
+        echo -e "    ${YELLOW}Fix:${NC} Add 'intel_iommu=on' or 'amd_iommu=on' to GRUB and reboot"
+        echo -e "    ${CYAN}Command:${NC} sudo nano /etc/default/grub"
+        echo -e "    ${CYAN}Add to GRUB_CMDLINE_LINUX_DEFAULT:${NC} intel_iommu=on (or amd_iommu=on)"
+        echo -e "    ${CYAN}Then run:${NC} sudo update-grub && sudo reboot"
+        issues_found=true
+    fi
+    
+    # Check 3: Nouveau driver loaded
+    if lsmod | grep -q nouveau; then
+        echo -e "  ${RED}✗ ISSUE:${NC} Nouveau driver is loaded (conflicts with NVIDIA vGPU)"
+        echo -e "    ${YELLOW}Fix:${NC} Blacklist nouveau driver"
+        echo -e "    ${CYAN}Command:${NC} echo 'blacklist nouveau' | sudo tee /etc/modprobe.d/blacklist-nouveau.conf"
+        echo -e "    ${CYAN}Then run:${NC} sudo update-initramfs -u && sudo reboot"
+        issues_found=true
+    fi
+    
+    # Check 4: libvirtd not running
+    if ! systemctl is-active --quiet libvirtd; then
+        echo -e "  ${RED}✗ ISSUE:${NC} libvirtd service not running"
+        echo -e "    ${YELLOW}Fix:${NC} Start and enable libvirtd service"
+        echo -e "    ${CYAN}Command:${NC} sudo systemctl enable --now libvirtd"
+        issues_found=true
+    fi
+    
+    # Check 5: User not in required groups
+    current_user=$(whoami)
+    if ! groups "$current_user" | grep -q libvirt; then
+        echo -e "  ${RED}✗ ISSUE:${NC} User not in libvirt group"
+        echo -e "    ${YELLOW}Fix:${NC} Add user to libvirt group"
+        echo -e "    ${CYAN}Command:${NC} sudo adduser $current_user libvirt"
+        echo -e "    ${CYAN}Note:${NC} Logout/login required after adding to group"
+        issues_found=true
+    fi
+    
+    if ! groups "$current_user" | grep -q kvm; then
+        echo -e "  ${RED}✗ ISSUE:${NC} User not in kvm group"
+        echo -e "    ${YELLOW}Fix:${NC} Add user to kvm group"
+        echo -e "    ${CYAN}Command:${NC} sudo adduser $current_user kvm"
+        echo -e "    ${CYAN}Note:${NC} Logout/login required after adding to group"
+        issues_found=true
+    fi
+    
+    # Check 6: NVIDIA driver issues
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        if ! nvidia-smi >/dev/null 2>&1; then
+            echo -e "  ${RED}✗ ISSUE:${NC} NVIDIA driver loaded but nvidia-smi fails"
+            echo -e "    ${YELLOW}Possible causes:${NC}"
+            echo -e "      - Driver/kernel version mismatch"
+            echo -e "      - Incomplete driver installation"
+            echo -e "      - Hardware issues"
+            echo -e "    ${YELLOW}Fix:${NC} Reinstall NVIDIA driver or rollback kernel"
+            issues_found=true
+        fi
+    fi
+    
+    # Check 7: No VFs available when expected
+    vf_found=false
+    for gpu_bdf in $(lspci | grep -i nvidia | grep -i vga | awk '{print $1}'); do
+        vfs=$(lspci | grep -E "${gpu_bdf%.*}\.[1-9a-f]" | grep -i nvidia)
+        if [ -n "$vfs" ]; then
+            vf_found=true
+            break
+        fi
+    done
+    
+    if [ "$vf_found" = false ] && command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}⚠ NOTICE:${NC} No SR-IOV VFs detected"
+        echo -e "    ${YELLOW}Enable VFs:${NC} /usr/lib/nvidia/sriov-manage -e <GPU_BDF>"
+        echo -e "    ${CYAN}Find GPU BDF:${NC} lspci | grep -i nvidia | grep -i vga"
+    fi
+    
+    # Check 8: VM fails to start
+    failed_vms=$(virsh list --all 2>/dev/null | grep "shut off" | wc -l)
+    if [ "$failed_vms" -gt 0 ] && [ "$SHOW_DETAILED" = true ]; then
+        echo -e "  ${YELLOW}⚠ NOTICE:${NC} $failed_vms VMs are shut off"
+        echo -e "    ${YELLOW}Check VM logs:${NC} journalctl -u libvirtd -f"
+        echo -e "    ${YELLOW}Check VM config:${NC} virsh dumpxml <vm_name>"
+    fi
+    
+    if [ "$issues_found" = false ]; then
+        echo -e "  ${GREEN}✓ No critical issues detected${NC}"
+    fi
+    
+    echo
+    
+    print_subsection "Kernel Rollback Instructions"
+    echo -e "${YELLOW}If NVIDIA driver fails after kernel update:${NC}"
+    echo
+    echo -e "${CYAN}1. List available kernels:${NC}"
+    echo -e "   dpkg --list | grep linux-image"
+    echo
+    echo -e "${CYAN}2. Reboot and select older kernel from GRUB menu${NC}"
+    echo -e "   (Hold Shift during boot to show GRUB menu)"
+    echo
+    echo -e "${CYAN}3. Or set default kernel in GRUB:${NC}"
+    echo -e "   sudo nano /etc/default/grub"
+    echo -e "   # Set GRUB_DEFAULT to kernel menu entry number"
+    echo -e "   # Example: GRUB_DEFAULT=\"1>2\" for submenu 1, entry 2"
+    echo -e "   sudo update-grub"
+    echo
+    echo -e "${CYAN}4. Remove problematic kernel:${NC}"
+    echo -e "   sudo apt remove linux-image-X.X.X-XX-generic"
+    echo -e "   sudo apt autoremove"
+    echo
+    echo -e "${CYAN}5. Hold kernel packages to prevent auto-update:${NC}"
+    echo -e "   sudo apt-mark hold linux-image-generic linux-headers-generic"
+    echo
+    echo -e "${CYAN}6. Unhold when ready to update:${NC}"
+    echo -e "   sudo apt-mark unhold linux-image-generic linux-headers-generic"
+    echo
+    
+    print_subsection "Driver Recovery Commands"
+    echo -e "${YELLOW}NVIDIA Driver Issues:${NC}"
+    echo
+    echo -e "${CYAN}1. Completely remove NVIDIA drivers:${NC}"
+    echo -e "   sudo nvidia-uninstall"
+    echo -e "   sudo apt purge 'nvidia-*'"
+    echo -e "   sudo apt autoremove"
+    echo
+    echo -e "${CYAN}2. Reinstall build dependencies:${NC}"
+    echo -e "   sudo apt update"
+    echo -e "   sudo apt install dkms gcc make linux-headers-\$(uname -r)"
+    echo
+    echo -e "${CYAN}3. Reinstall vGPU driver:${NC}"
+    echo -e "   sudo dpkg -i nvidia-vgpu-ubuntu-*.deb"
+    echo -e "   # Or run the .run file again"
+    echo
+    echo -e "${CYAN}4. Check driver build logs:${NC}"
+    echo -e "   dkms status"
+    echo -e "   sudo dkms build nvidia-vgpu/XXX"  # Replace XXX with version
+    echo
+    
+    print_subsection "Emergency Recovery"
+    echo -e "${YELLOW}If system won't boot after changes:${NC}"
+    echo
+    echo -e "${CYAN}1. Boot from recovery mode:${NC}"
+    echo -e "   Select 'Advanced options' in GRUB"
+    echo -e "   Choose 'recovery mode'"
+    echo
+    echo -e "${CYAN}2. Remove problematic configurations:${NC}"
+    echo -e "   # Remove nouveau blacklist"
+    echo -e "   rm /etc/modprobe.d/blacklist-nouveau.conf"
+    echo -e "   update-initramfs -u"
+    echo
+    echo -e "   # Reset GRUB configuration"
+    echo -e "   cp /etc/default/grub.backup.* /etc/default/grub"
+    echo -e "   update-grub"
+    echo
+    echo -e "${CYAN}3. Boot from USB/Live CD:${NC}"
+    echo -e "   Mount root filesystem"
+    echo -e "   Chroot into system"
+    echo -e "   Fix configurations and reboot"
+    echo
+    
+    print_subsection "Log Files for Debugging"
+    echo -e "${CYAN}System logs:${NC}"
+    echo -e "  /var/log/syslog"
+    echo -e "  journalctl -u libvirtd"
+    echo -e "  journalctl -u nvidia-persistenced"
+    echo -e "  dmesg | grep -i nvidia"
+    echo -e "  dmesg | grep -i vfio"
+    echo
+    echo -e "${CYAN}VM logs:${NC}"
+    echo -e "  /var/log/libvirt/qemu/<vm_name>.log"
+    echo -e "  virsh dominfo <vm_name>"
+    echo -e "  virsh qemu-monitor-command <vm_name> --hmp 'info qtree'"
+    echo
+}
+
 # Show help
 show_help() {
     echo "KVM vGPU System Status Monitor"
@@ -474,6 +662,7 @@ show_status() {
     show_iommu_groups
     show_storage_info
     show_resource_summary
+    show_issues_and_troubleshooting
     
     if [ "$1" != "watch" ]; then
         echo -e "${BLUE}Run with -w for continuous monitoring${NC}"

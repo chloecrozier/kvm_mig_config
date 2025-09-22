@@ -86,6 +86,37 @@ This repository contains comprehensive documentation and automation scripts for 
 ./monitor_status.sh -w -r 10
 ```
 
+#### `k8s_setup.sh`
+**Kubernetes with GPU Support Setup**
+- Complete Kubernetes cluster installation
+- containerd container runtime configuration
+- NVIDIA Container Toolkit integration
+- NVIDIA GPU Operator deployment
+- Flannel CNI networking
+- Helm package manager
+- Sample GPU workloads (TensorFlow, PyTorch)
+- Automated GPU resource scheduling
+
+**Generated Components:**
+- `k8s_status.sh` - Cluster status monitoring
+- `k8s_gpu_manage.sh` - GPU workload management
+- Sample YAML manifests for GPU testing
+
+**Usage:**
+```bash
+# Install Kubernetes with GPU support
+./k8s_setup.sh
+
+# Monitor cluster status
+./k8s_status.sh
+
+# Test GPU functionality
+./k8s_gpu_manage.sh test-gpu
+
+# Deploy TensorFlow GPU workload
+./k8s_gpu_manage.sh test-tensorflow
+```
+
 ## 🚀 Quick Start
 
 ### 1. Prerequisites Check
@@ -115,6 +146,13 @@ chmod +x monitor_status.sh
 ./monitor_status.sh
 ```
 
+### 5. Kubernetes Setup (Optional)
+For containerized GPU workloads:
+```bash
+chmod +x k8s_setup.sh
+./k8s_setup.sh
+```
+
 ## 📋 System Requirements
 
 ### Hardware
@@ -127,6 +165,176 @@ chmod +x monitor_status.sh
 - **OS**: Ubuntu 24.04 LTS (primary target)
 - **BIOS**: Virtualization and IOMMU enabled
 - **Network**: Static IP recommended for stability
+
+## 🎯 Use Cases & Deployment Scenarios
+
+### AI/ML Development & Training
+**Recommended Setup:** 2-4 VMs with vGPU instances
+- **VM 1**: Development environment (4-8GB vGPU, 16GB RAM, 4 vCPUs)
+- **VM 2**: Training workstation (8-16GB vGPU, 32GB RAM, 8 vCPUs)
+- **VM 3**: Inference server (4-8GB vGPU, 16GB RAM, 4 vCPUs)
+- **VM 4**: Jupyter/notebook server (2-4GB vGPU, 8GB RAM, 2 vCPUs)
+
+**Use Cases:**
+- TensorFlow/PyTorch model development
+- Data preprocessing and analysis
+- Model training and fine-tuning
+- Inference API services
+- Jupyter notebook environments
+
+### Multi-User Research Environment
+**Recommended Setup:** 6-12 VMs with smaller vGPU allocations
+- **Per User VM**: 2-4GB vGPU, 8-16GB RAM, 2-4 vCPUs
+- **Shared Storage**: NFS/CIFS for datasets
+- **Load Balancer**: For web-based interfaces
+
+**Use Cases:**
+- University research labs
+- Corporate R&D teams
+- Multi-tenant GPU access
+- Educational environments
+- Collaborative development
+
+### Production AI Services
+**Recommended Setup:** 3-6 VMs with high availability
+- **Load Balancer VM**: No GPU, 4GB RAM, 2 vCPUs
+- **API Servers**: 4-8GB vGPU each, 16GB RAM, 4 vCPUs
+- **Database VM**: No GPU, 16GB RAM, 4 vCPUs
+- **Monitoring VM**: No GPU, 8GB RAM, 2 vCPUs
+
+**Use Cases:**
+- REST API inference services
+- Real-time image/video processing
+- Natural language processing APIs
+- Computer vision applications
+- Scalable ML microservices
+
+### Container Orchestration (Kubernetes)
+**Recommended Setup:** 3-5 VMs for K8s cluster
+- **Master Node**: No GPU, 8GB RAM, 4 vCPUs
+- **Worker Nodes**: 8-16GB vGPU each, 32GB RAM, 8 vCPUs
+- **Storage Node**: No GPU, 16GB RAM, 4 vCPUs
+
+**Use Cases:**
+- Containerized ML workloads
+- Auto-scaling GPU applications
+- Multi-tenant container platform
+- CI/CD with GPU testing
+- Microservices architecture
+
+### Development & Testing
+**Recommended Setup:** 2-3 VMs for different environments
+- **Development VM**: 4GB vGPU, 16GB RAM, 4 vCPUs
+- **Staging VM**: 8GB vGPU, 24GB RAM, 6 vCPUs
+- **Testing VM**: 2GB vGPU, 8GB RAM, 2 vCPUs
+
+**Use Cases:**
+- CUDA application development
+- GPU driver testing
+- Performance benchmarking
+- Software validation
+- Integration testing
+
+## 📊 VM Configuration Guidelines
+
+### GPU Memory Allocation Strategy
+
+#### RTX A6000 (48GB Total)
+```
+Scenario 1: High-Performance (3 VMs)
+├── VM1: 16GB vGPU (A6000-16Q) - Heavy training
+├── VM2: 16GB vGPU (A6000-16Q) - Model development  
+└── VM3: 16GB vGPU (A6000-16Q) - Inference server
+
+Scenario 2: Multi-User (6 VMs)
+├── VM1-4: 8GB vGPU each (A6000-8Q) - User workstations
+├── VM5: 8GB vGPU (A6000-8Q) - Shared services
+└── VM6: 8GB vGPU (A6000-8Q) - Testing environment
+
+Scenario 3: Mixed Workload (12 VMs)
+├── VM1-2: 8GB vGPU each (A6000-8Q) - Primary users
+├── VM3-8: 4GB vGPU each (A6000-4Q) - Development
+└── VM9-12: 4GB vGPU each (A6000-4Q) - Testing/CI
+```
+
+#### RTX 8000 (48GB Total)
+```
+Scenario 1: Research Lab (8 VMs)
+├── VM1-2: 8GB vGPU each (RTX8000-8Q) - Senior researchers
+├── VM3-6: 4GB vGPU each (RTX8000-4Q) - Graduate students
+└── VM7-8: 8GB vGPU each (RTX8000-8Q) - Shared compute
+
+Scenario 2: Production (4 VMs)
+├── VM1-2: 12GB vGPU each (RTX8000-12Q) - Primary services
+├── VM3: 12GB vGPU (RTX8000-12Q) - Backup/failover
+└── VM4: 12GB vGPU (RTX8000-12Q) - Development
+```
+
+### System Resource Recommendations
+
+#### Memory Allocation (Host RAM)
+- **64GB Host**: Support 4-6 VMs (8-16GB each)
+- **128GB Host**: Support 6-10 VMs (8-24GB each)
+- **256GB Host**: Support 10-16 VMs (8-32GB each)
+
+#### CPU Allocation
+- **16 Cores**: 2-4 VMs (4-8 vCPUs each)
+- **32 Cores**: 4-8 VMs (4-8 vCPUs each)
+- **64 Cores**: 8-16 VMs (4-8 vCPUs each)
+
+#### Storage Planning
+- **OS Disk**: 50-100GB per VM
+- **Data Storage**: 500GB-2TB per VM (depending on datasets)
+- **Shared Storage**: NFS/CIFS for common datasets
+- **Backup Storage**: 2x total VM storage
+
+### Network Configuration
+
+#### Single Host Setup
+```
+Host: 10.110.20.180/24
+├── VM1: 10.110.20.181 (Static)
+├── VM2: 10.110.20.182 (Static)
+├── VM3: 10.110.20.183 (Static)
+└── VM4: 10.110.20.184 (Static)
+```
+
+#### Multi-Host Setup
+```
+Management Network: 10.110.20.0/24
+├── Host1: 10.110.20.180
+├── Host2: 10.110.20.181
+└── Storage: 10.110.20.190
+
+VM Network: 192.168.100.0/24
+├── VM Pool: 192.168.100.10-100
+└── Services: 192.168.100.200-250
+```
+
+## 🔧 Scaling Recommendations
+
+### Small Environment (1-5 Users)
+- **1 Host**: RTX A6000, 64GB RAM, 16 cores
+- **2-4 VMs**: 8-16GB vGPU each
+- **Use Case**: Small team development, research
+
+### Medium Environment (5-20 Users)
+- **1-2 Hosts**: RTX A6000 each, 128GB RAM, 32 cores
+- **6-12 VMs**: 4-8GB vGPU each
+- **Shared Storage**: NFS server
+- **Use Case**: Department, research lab
+
+### Large Environment (20+ Users)
+- **2-4 Hosts**: RTX A6000 each, 256GB RAM, 64 cores
+- **12-24 VMs**: 2-8GB vGPU each
+- **Infrastructure**: Load balancers, monitoring
+- **Use Case**: Enterprise, university
+
+### Container Platform
+- **3-5 Hosts**: Kubernetes cluster
+- **Worker Nodes**: 8-16GB vGPU each
+- **Master Nodes**: No GPU required
+- **Use Case**: Scalable containerized workloads
 
 ## 🔧 Key Features
 
@@ -211,5 +419,6 @@ kvm_mig_config/
 ├── config.md              # Comprehensive setup guide
 ├── pre_reqs.sh           # Prerequisites checker
 ├── config_install.sh     # Main installation script
-└── monitor_status.sh     # System status monitor
+├── monitor_status.sh     # System status monitor
+└── k8s_setup.sh          # Kubernetes with GPU support
 ```

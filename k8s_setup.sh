@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Kubernetes Setup Script for vGPU Environment
-# This script sets up Kubernetes with GPU support for containerized workloads
+# This script sets up Kubernetes v1.30 with GPU support
 # Run with: bash k8s_setup.sh
 
 set -e
@@ -12,15 +12,13 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Configuration variables
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/k8s_install.log"
-K8S_VERSION="1.28"
-CONTAINERD_VERSION="1.7.2"
-NVIDIA_OPERATOR_VERSION="v23.9.1"
+K8S_VERSION="1.30"
+NODE_TYPE="control-plane"  # or "worker"
 
 print_header() {
     echo -e "${BLUE}=================================="
@@ -94,56 +92,38 @@ check_prerequisites() {
 
 # Confirm installation
 confirm_installation() {
-    echo -e "${YELLOW}This script will install Kubernetes with GPU support.${NC}"
+    echo -e "${YELLOW}This script will install Kubernetes v1.30 with GPU support.${NC}"
     echo "Components to be installed:"
-    echo "  - containerd container runtime"
+    echo "  - Docker container runtime"
     echo "  - Kubernetes (kubeadm, kubelet, kubectl)"
     echo "  - NVIDIA Container Toolkit"
-    echo "  - NVIDIA GPU Operator"
-    echo "  - Helm package manager"
+    echo "  - Flannel CNI"
     echo
-    read -p "Do you want to continue? (y/N): " -n 1 -r
+    read -p "Install as control-plane or worker? (c/w): " -n 1 -r
     echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        print_info "Installation cancelled by user"
+    if [[ $REPLY =~ ^[Cc]$ ]]; then
+        NODE_TYPE="control-plane"
+    elif [[ $REPLY =~ ^[Ww]$ ]]; then
+        NODE_TYPE="worker"
+    else
+        print_info "Installation cancelled"
         exit 0
     fi
 }
 
-# Install containerd
-install_containerd() {
-    print_section "Installing containerd"
+# Install Docker
+install_docker() {
+    print_section "Installing Docker"
     
     # Install dependencies
     sudo apt update >> "$LOG_FILE" 2>&1
-    sudo apt install -y \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release \
-        >> "$LOG_FILE" 2>&1
+    sudo apt install -y apt-transport-https ca-certificates curl >> "$LOG_FILE" 2>&1
     
-    # Add Docker repository (for containerd)
-    if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
-        sudo mkdir -p /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    fi
+    # Install Docker
+    sudo apt install -y docker.io >> "$LOG_FILE" 2>&1
+    sudo systemctl enable --now docker >> "$LOG_FILE" 2>&1
     
-    sudo apt update >> "$LOG_FILE" 2>&1
-    sudo apt install -y containerd.io >> "$LOG_FILE" 2>&1
-    
-    # Configure containerd
-    sudo mkdir -p /etc/containerd
-    containerd config default | sudo tee /etc/containerd/config.toml >> "$LOG_FILE"
-    
-    # Enable systemd cgroup driver
-    sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-    
-    sudo systemctl restart containerd >> "$LOG_FILE" 2>&1
-    sudo systemctl enable containerd >> "$LOG_FILE" 2>&1
-    
-    print_success "containerd installed and configured"
+    print_success "Docker installed and started"
 }
 
 # Configure system for Kubernetes
@@ -152,24 +132,15 @@ configure_system() {
     
     # Disable swap
     sudo swapoff -a >> "$LOG_FILE" 2>&1
-    sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+    sudo sed -i '/ swap / s/^/#/' /etc/fstab
     
     # Load required kernel modules
-    cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf >> "$LOG_FILE"
-overlay
-br_netfilter
-EOF
-    
-    sudo modprobe overlay >> "$LOG_FILE" 2>&1
     sudo modprobe br_netfilter >> "$LOG_FILE" 2>&1
+    echo 'br_netfilter' | sudo tee -a /etc/modules-load.d/k8s.conf >> "$LOG_FILE"
     
     # Configure sysctl
-    cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf >> "$LOG_FILE"
-net.bridge.bridge-nf-call-iptables  = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward                 = 1
-EOF
-    
+    echo 'net.bridge.bridge-nf-call-iptables=1' | sudo tee /etc/sysctl.d/99-kubernetes-cri.conf >> "$LOG_FILE"
+    echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.d/99-kubernetes-cri.conf >> "$LOG_FILE"
     sudo sysctl --system >> "$LOG_FILE" 2>&1
     
     print_success "System configured for Kubernetes"
@@ -180,57 +151,66 @@ install_kubernetes() {
     print_section "Installing Kubernetes"
     
     # Add Kubernetes repository
-    if [ ! -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg ]; then
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v${K8S_VERSION}/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${K8S_VERSION}/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+    if [ ! -f /etc/apt/keyrings/k8s.gpg ]; then
+        sudo mkdir -p /etc/apt/keyrings
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v${K8S_VERSION}/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/k8s.gpg
+        echo "deb [signed-by=/etc/apt/keyrings/k8s.gpg] https://pkgs.k8s.io/core:/stable:/v${K8S_VERSION}/deb/ /" | sudo tee /etc/apt/sources.list.d/k8s.list
     fi
     
     sudo apt update >> "$LOG_FILE" 2>&1
     sudo apt install -y kubelet kubeadm kubectl >> "$LOG_FILE" 2>&1
     sudo apt-mark hold kubelet kubeadm kubectl >> "$LOG_FILE" 2>&1
     
-    print_success "Kubernetes components installed"
+    print_success "Kubernetes v${K8S_VERSION} components installed"
 }
 
-# Initialize Kubernetes cluster
+# Initialize Kubernetes cluster or join as worker
 init_cluster() {
-    print_section "Initializing Kubernetes Cluster"
-    
-    # Get the primary IP address
-    PRIMARY_IP=$(ip route get 8.8.8.8 | grep -oP 'src \K\S+')
-    
-    print_info "Initializing cluster with API server on $PRIMARY_IP"
-    
-    # Initialize cluster
-    sudo kubeadm init \
-        --apiserver-advertise-address="$PRIMARY_IP" \
-        --pod-network-cidr=10.244.0.0/16 \
-        --cri-socket=unix:///var/run/containerd/containerd.sock \
-        >> "$LOG_FILE" 2>&1
-    
-    # Set up kubectl for regular user
-    mkdir -p "$HOME/.kube"
-    sudo cp -i /etc/kubernetes/admin.conf "$HOME/.kube/config"
-    sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
-    
-    # Allow scheduling on control plane (single node setup)
-    kubectl taint nodes --all node-role.kubernetes.io/control-plane- >> "$LOG_FILE" 2>&1 || true
-    
-    print_success "Kubernetes cluster initialized"
-    print_info "Cluster API server: https://$PRIMARY_IP:6443"
+    if [ "$NODE_TYPE" = "control-plane" ]; then
+        print_section "Initializing Control Plane"
+        
+        # Initialize cluster
+        sudo kubeadm init --pod-network-cidr=10.244.0.0/16 >> "$LOG_FILE" 2>&1
+        
+        # Set up kubectl for regular user
+        mkdir -p "$HOME/.kube"
+        sudo cp -i /etc/kubernetes/admin.conf "$HOME/.kube/config"
+        sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
+        
+        print_success "Control plane initialized"
+        
+        # Show join command
+        echo -e "${YELLOW}To join worker nodes, run this command on each worker:${NC}"
+        sudo kubeadm token create --print-join-command
+        echo
+        
+    else
+        print_section "Joining Worker Node"
+        
+        echo -e "${YELLOW}Enter the join command from the control plane:${NC}"
+        echo "Example: kubeadm join 192.168.122.82:6443 --token ... --discovery-token-ca-cert-hash sha256:..."
+        read -p "Join command: " JOIN_COMMAND
+        
+        if [ -n "$JOIN_COMMAND" ]; then
+            sudo $JOIN_COMMAND >> "$LOG_FILE" 2>&1
+            print_success "Worker node joined cluster"
+        else
+            print_error "No join command provided"
+            exit 1
+        fi
+    fi
 }
 
-# Install CNI (Flannel)
+# Install CNI (Flannel) - only on control plane
 install_cni() {
-    print_section "Installing CNI (Flannel)"
-    
-    kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml >> "$LOG_FILE" 2>&1
-    
-    # Wait for flannel to be ready
-    print_info "Waiting for Flannel pods to be ready..."
-    kubectl wait --for=condition=ready pod -l app=flannel -n kube-flannel --timeout=300s >> "$LOG_FILE" 2>&1
-    
-    print_success "Flannel CNI installed"
+    if [ "$NODE_TYPE" = "control-plane" ]; then
+        print_section "Installing Flannel CNI"
+        
+        kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml >> "$LOG_FILE" 2>&1
+        
+        print_success "Flannel CNI installed"
+        print_info "Waiting for pods to be ready..."
+    fi
 }
 
 # Install Helm
@@ -256,44 +236,45 @@ install_nvidia_container_toolkit() {
     fi
     
     # Add NVIDIA repository
-    distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-    curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+        sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    
+    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
     
-    sudo apt update >> "$LOG_FILE" 2>&1
-    sudo apt install -y nvidia-container-toolkit >> "$LOG_FILE" 2>&1
+    sudo apt-get update >> "$LOG_FILE" 2>&1
+    sudo apt-get install -y nvidia-container-toolkit >> "$LOG_FILE" 2>&1
     
-    # Configure containerd for NVIDIA
-    sudo nvidia-ctk runtime configure --runtime=containerd >> "$LOG_FILE" 2>&1
-    sudo systemctl restart containerd >> "$LOG_FILE" 2>&1
+    # Configure Docker for NVIDIA
+    sudo nvidia-ctk runtime configure --runtime=docker >> "$LOG_FILE" 2>&1
+    sudo systemctl restart docker >> "$LOG_FILE" 2>&1
     
-    print_success "NVIDIA Container Toolkit installed"
+    # Test GPU access
+    print_info "Testing GPU access in container..."
+    if sudo docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi >> "$LOG_FILE" 2>&1; then
+        print_success "NVIDIA Container Toolkit working"
+    else
+        print_warn "GPU test failed - check logs"
+    fi
 }
 
-# Install NVIDIA GPU Operator
-install_gpu_operator() {
-    print_section "Installing NVIDIA GPU Operator"
-    
-    if ! command -v nvidia-smi >/dev/null 2>&1; then
-        print_warn "NVIDIA driver not found, skipping GPU operator installation"
-        return 0
+# Install NVIDIA Device Plugin
+install_gpu_device_plugin() {
+    if [ "$NODE_TYPE" = "control-plane" ]; then
+        print_section "Installing NVIDIA Device Plugin"
+        
+        if ! command -v nvidia-smi >/dev/null 2>&1; then
+            print_warn "NVIDIA driver not found, skipping device plugin installation"
+            return 0
+        fi
+        
+        # Install NVIDIA device plugin
+        kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/main/deployments/static/nvidia-device-plugin.yml >> "$LOG_FILE" 2>&1
+        
+        print_success "NVIDIA Device Plugin installed"
+        print_info "Check with: kubectl describe nodes"
     fi
-    
-    # Add NVIDIA Helm repository
-    helm repo add nvidia https://helm.ngc.nvidia.com/nvidia >> "$LOG_FILE" 2>&1
-    helm repo update >> "$LOG_FILE" 2>&1
-    
-    # Install GPU Operator
-    helm install --wait gpu-operator \
-        -n gpu-operator --create-namespace \
-        nvidia/gpu-operator \
-        --version="$NVIDIA_OPERATOR_VERSION" \
-        --set driver.enabled=false \
-        >> "$LOG_FILE" 2>&1
-    
-    print_success "NVIDIA GPU Operator installed"
 }
 
 # Create sample GPU workload
@@ -619,43 +600,36 @@ EOF
 show_completion_summary() {
     print_section "Installation Complete"
     
-    echo -e "${GREEN}Kubernetes with GPU support has been successfully installed!${NC}"
-    echo
-    
-    print_info "Cluster Information:"
-    PRIMARY_IP=$(ip route get 8.8.8.8 | grep -oP 'src \K\S+')
-    echo -e "  API Server: https://$PRIMARY_IP:6443"
-    echo -e "  Config: $HOME/.kube/config"
-    echo
-    
-    print_info "Useful Commands:"
-    echo -e "  ${CYAN}kubectl get nodes${NC}                    - Check node status"
-    echo -e "  ${CYAN}kubectl get pods --all-namespaces${NC}    - List all pods"
-    echo -e "  ${CYAN}./k8s_status.sh${NC}                      - Comprehensive cluster status"
-    echo -e "  ${CYAN}./k8s_gpu_manage.sh test-gpu${NC}         - Test GPU functionality"
-    echo
-    
-    print_info "GPU Testing:"
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        echo -e "  ${CYAN}./k8s_gpu_manage.sh deploy-examples${NC}  - Deploy GPU workloads"
-        echo -e "  ${CYAN}./k8s_gpu_manage.sh test-tensorflow${NC}  - Test TensorFlow GPU"
-        echo -e "  ${CYAN}./k8s_gpu_manage.sh test-pytorch${NC}     - Test PyTorch GPU"
+    if [ "$NODE_TYPE" = "control-plane" ]; then
+        echo -e "${GREEN}Kubernetes control plane with GPU support installed!${NC}"
+        echo
+        print_info "Cluster Commands:"
+        echo -e "  ${CYAN}kubectl get nodes${NC}                    - Check node status"
+        echo -e "  ${CYAN}kubectl get pods --all-namespaces${NC}    - List all pods"
+        echo -e "  ${CYAN}kubeadm token create --print-join-command${NC} - Get worker join command"
+        echo
+        
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            print_info "GPU Testing:"
+            echo -e "  ${CYAN}kubectl describe nodes${NC}             - Check GPU resources"
+            echo -e "  ${CYAN}docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi${NC}"
+        fi
+        
+        print_info "Next Steps:"
+        echo -e "  1. Wait for all pods to be ready"
+        echo -e "  2. Join worker nodes using the join command above"
+        echo -e "  3. Deploy GPU workloads"
+        
     else
-        echo -e "  ${YELLOW}NVIDIA driver not detected - GPU features limited${NC}"
+        echo -e "${GREEN}Worker node successfully joined the cluster!${NC}"
+        echo
+        print_info "Verify on control plane:"
+        echo -e "  ${CYAN}kubectl get nodes${NC}                    - Should show this worker"
+        echo -e "  ${CYAN}kubectl describe node $(hostname)${NC}    - Check node details"
     fi
-    echo
     
-    print_info "Files Created:"
-    echo -e "  - k8s_status.sh (cluster monitoring)"
-    echo -e "  - k8s_gpu_manage.sh (GPU workload management)"
-    echo -e "  - gpu-*.yaml (sample GPU workloads)"
     echo
-    
-    print_info "Next Steps:"
-    echo -e "  1. Wait for all pods to be ready: kubectl get pods --all-namespaces"
-    echo -e "  2. Check cluster status: ./k8s_status.sh"
-    echo -e "  3. Test GPU functionality: ./k8s_gpu_manage.sh test-gpu"
-    echo -e "  4. Deploy your GPU workloads using the sample manifests"
+    print_info "Installation log: $LOG_FILE"
 }
 
 # Main installation function
@@ -668,16 +642,18 @@ main() {
     check_prerequisites
     confirm_installation
     
-    install_containerd
+    install_docker
     configure_system
     install_kubernetes
     init_cluster
     install_cni
-    install_helm
     install_nvidia_container_toolkit
-    install_gpu_operator
-    create_sample_workloads
-    create_management_scripts
+    install_gpu_device_plugin
+    
+    if [ "$NODE_TYPE" = "control-plane" ]; then
+        create_sample_workloads
+        create_management_scripts
+    fi
     
     show_completion_summary
 }

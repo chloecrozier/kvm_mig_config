@@ -1,32 +1,32 @@
-# KVM vGPU Setup
+# Ubuntu 24.04 KVM vGPU + Kubernetes Setup
 
-Automated setup for KVM hypervisor with NVIDIA vGPU support. Share GPU resources across multiple virtual machines.
+Automated setup for KVM hypervisor with NVIDIA vGPU support and Kubernetes GPU orchestration on Ubuntu 24.04.
 
 ## 🚀 Quick Start
 
 ```bash
 # 1. Check prerequisites
-./pre_reqs.sh
+./kvm-prereqs.sh
 
 # 2. Install KVM + vGPU
-./config_install.sh
+./kvm-vgpu-install.sh
 
 # 3. Monitor system
-./monitor_status.sh
+./kvm-monitor.sh
 
-# 4. Optional: Add Kubernetes
-./k8s_setup.sh
+# 4. Optional: Add Kubernetes with GPU support
+./k8s-gpu-setup.sh
 ```
 
 ## 📁 Files
 
 | Script | Purpose |
 |--------|---------|
-| `config.md` | Complete setup guide |
-| `pre_reqs.sh` | Check system compatibility |
-| `config_install.sh` | Install KVM + vGPU stack |
-| `monitor_status.sh` | System status & troubleshooting |
-| `k8s_setup.sh` | Kubernetes with GPU support |
+| `kvm-vgpu-guide.md` | Complete setup guide |
+| `kvm-prereqs.sh` | Check system compatibility |
+| `kvm-vgpu-install.sh` | Install KVM + vGPU stack |
+| `kvm-monitor.sh` | System status & troubleshooting |
+| `k8s-gpu-setup.sh` | Kubernetes v1.30 with GPU support |
 
 ## 💻 Requirements
 
@@ -64,7 +64,7 @@ Automated setup for KVM hypervisor with NVIDIA vGPU support. Share GPU resources
 
 ## 🆘 Troubleshooting
 
-Run `./monitor_status.sh` for automatic issue detection and fixes.
+Run `./kvm-monitor.sh` for automatic issue detection and fixes.
 
 Common issues:
 - **No GPU**: Check BIOS virtualization settings
@@ -78,4 +78,4 @@ Common issues:
 
 ---
 
-**Need help?** Check `config.md` for detailed instructions or run `./monitor_status.sh` for system diagnostics.
+**Need help?** Check `kvm-vgpu-guide.md` for detailed instructions or run `./kvm-monitor.sh` for system diagnostics.
